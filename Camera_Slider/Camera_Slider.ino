@@ -15,6 +15,17 @@
 #define LCD_X     84
 #define LCD_Y     48
 
+#define LOWER_BUTTON_PIN 13
+#define UPPER_BUTTON_PIN 12
+
+#define FULL4WIRE 4
+
+// Motor pin definitions
+#define motorPin1  3     // IN1 on the ULN2003 driver 1
+#define motorPin2  4     // IN2 on the ULN2003 driver 1
+#define motorPin3  5     // IN3 on the ULN2003 driver 1
+#define motorPin4  6     // IN4 on the ULN2003 driver 1
+
 
 char lcdCharArr[73] = "Welcome to the camera slider!";
 
@@ -118,25 +129,38 @@ static const byte ASCII[][5] =
 ,{0x78, 0x46, 0x41, 0x46, 0x78} // 7f →
 };
 
+const char *menuItems[5] = {
+  "Status",
+  "Set Speed",
+  "Set Pos",
+  "Save Cfg",
+  "Item 5"
+};
+const uint8_t numMenuItems = 5;
+
+typedef enum buttonPress_e{
+  BUT_NONE,
+  BUT_UP,
+  BUT_DOWN,
+  BUT_BOTH
+}buttonPress_t;
+
 //************* MOTOR Stuff *************
-
-#define FULL4WIRE 4
-
-// Motor pin definitions
-#define motorPin1  3     // IN1 on the ULN2003 driver 1
-#define motorPin2  4     // IN2 on the ULN2003 driver 1
-#define motorPin3  5     // IN3 on the ULN2003 driver 1
-#define motorPin4  6     // IN4 on the ULN2003 driver 1
 
 // Initialize with pin sequence IN1-IN3-IN2-IN4 for using the AccelStepper with 28BYJ-48
 AccelStepper stepper1(FULL4WIRE, motorPin1, motorPin3, motorPin2, motorPin4);
+
+//************* Other Pins *************
 
 volatile unsigned long diff = 0;
 volatile uint8_t timerFlag = 0;
 //************* Setup *************
 
 void setup() {
-  stepper1.setMaxSpeed(5.0);
+  pinMode(LOWER_BUTTON_PIN, INPUT);
+  pinMode(UPPER_BUTTON_PIN, INPUT);
+  
+  stepper1.setMaxSpeed(0.5);
   stepper1.setAcceleration(100.0);
   stepper1.setSpeed(100);
   stepper1.moveTo(400);
@@ -169,6 +193,7 @@ void setup() {
 
 void loop() {
   static unsigned long lastPrint = millis();
+
   //Change direction when the stepper reaches the target position
   if (stepper1.distanceToGo() == 0) {
     stepper1.moveTo(-stepper1.currentPosition());
@@ -180,11 +205,110 @@ void loop() {
     lastPrint = millis();
     
   }
+  if (_GetButtonPressType(250) == BUT_BOTH){
+    _ShowMenu();
+    _Debounce();
+  }
+}
+
+//************* Button Helpers *************
+
+buttonPress_t _GetButtonPressType(uint16_t frame){
+  unsigned long startTime = millis();
+  bool lowBPressed = digitalRead(LOWER_BUTTON_PIN);
+  bool uppBPressed = digitalRead(UPPER_BUTTON_PIN);
+  bool bothPressed = false;
+  buttonPress_t stat = BUT_NONE;
+  
+  if(lowBPressed && uppBPressed){
+    return BUT_BOTH;
+  }
+  else if(lowBPressed){
+    stat = BUT_DOWN;
+    while ((millis() - startTime) < frame){
+      if (digitalRead(UPPER_BUTTON_PIN)){
+        stat = BUT_BOTH;
+        break;
+      }
+    }
+  }
+  else if(uppBPressed){
+    stat = BUT_UP;
+    while ((millis() - startTime) < frame){
+      if (digitalRead(LOWER_BUTTON_PIN)){
+        stat = BUT_BOTH;
+        break;
+      }
+    }
+  }
+  return stat;
+}
+
+void _Debounce(){
+    while (digitalRead(LOWER_BUTTON_PIN) || digitalRead(UPPER_BUTTON_PIN)){
+      //Nothing
+    }
+    return;
 }
 
 //************* Stepper Helpers *************
 
 //************* Menu Helpers *************
+
+void _ShowMenu(){
+  char * buff = lcdCharArr;
+  char curPointerBuff[12] = "";
+  uint8_t index = 0;
+  buttonPress_t but;
+   
+  buff =  _PutHeaderInBuffer(buff, "Menu");
+  _SetCursorOnMenuItem(curPointerBuff, menuItems[0]);
+  buff = _PutLineInBuffer(buff,curPointerBuff);
+  buff =_PutLineInBuffer(buff, menuItems[1]);
+  buff =_PutLineInBuffer(buff, menuItems[2]);
+  buff =_PutLineInBuffer(buff, menuItems[3]);
+  buff =_PutLineInBuffer(buff, menuItems[4]);
+  
+  LcdPrint(lcdCharArr);
+  _Debounce();
+  
+  while (1){
+    but = _GetButtonPressType(250);
+    if (but != BUT_NONE){
+      _Debounce();
+    }
+    switch(but){
+      case(BUT_UP):
+        if (index > 0){
+          buff = lcdCharArr + ((index + 1) * 12);
+          _PutLineInBuffer(buff, menuItems[index]);
+          index--;
+          _SetCursorOnMenuItem(curPointerBuff, menuItems[index]);
+          buff -= 12;
+          buff = _PutLineInBuffer(buff,curPointerBuff);
+          LcdPrint(lcdCharArr);
+        }
+        break;
+      case(BUT_DOWN):
+        if (index < 4){
+          buff = lcdCharArr + ((index + 1) * 12);
+          _PutLineInBuffer(buff, menuItems[index]);
+          index++;
+          _SetCursorOnMenuItem(curPointerBuff, menuItems[index]);
+          buff += 12;
+          buff = _PutLineInBuffer(buff,curPointerBuff);
+          LcdPrint(lcdCharArr);
+        }
+        break;
+      case(BUT_BOTH):
+        return;
+        break;
+      case(BUT_NONE):
+        //Nothing
+        break;
+    }
+  }
+}
 
 void _UpdateMenu(){
   char * buff = lcdCharArr;
@@ -193,20 +317,32 @@ void _UpdateMenu(){
   LcdPrint(lcdCharArr);  
 }
 
-char * _PutHeaderInBuffer(char * buff, char * msg){
+void _SetCursorOnMenuItem(char * buff, const char * item){
+  strcpy(buff, "->");
+  buff += 2;
+  strncpy(buff, item, 10);
+}
+
+char * _PutHeaderInBuffer(char * buff, const char * msg){
   uint8_t len = strlen(msg);
-  uint8_t spacesBeforeAndAfter = (12 - len) / 2;
+  uint8_t startIndex  = (6 - (len/2));
   uint8_t i = 0;
-  for(i = 0; i < spacesBeforeAndAfter; i++){
-    *buff++ = '-';
-  }
+  char thisBuff[] = "------------";
+
+  strncpy(thisBuff+startIndex, msg, len);
+  buff = _PutLineInBuffer(buff, thisBuff);
+
+  return buff;
+}
+
+
+char * _PutLineInBuffer(char * buff, const char * msg){
+  uint8_t len = strlen(msg);
+  uint8_t i = 0;
   for(i = 0; i < len; i++){
     *buff++ = *msg++;
   }
-  for(i = 0; i < spacesBeforeAndAfter; i++){
-    *buff++ = '-';
-  }
-  if(len % 2){ //If odd, add another space
+  for(i = 12-len; i > 0; i--){ //If odd, add another space
     *buff++ = 32;
   }
   return buff;
