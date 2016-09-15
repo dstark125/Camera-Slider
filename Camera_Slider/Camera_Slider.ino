@@ -16,7 +16,7 @@
 #define LCD_Y     48
 
 
-char lcdCharArr[73] = "Welcome to the frequency detector!";
+char lcdCharArr[73] = "Welcome to the camera slider!";
 
 static const byte ASCII[][5] =
 {
@@ -131,16 +131,31 @@ static const byte ASCII[][5] =
 // Initialize with pin sequence IN1-IN3-IN2-IN4 for using the AccelStepper with 28BYJ-48
 AccelStepper stepper1(FULL4WIRE, motorPin1, motorPin3, motorPin2, motorPin4);
 
+volatile unsigned long diff = 0;
+volatile uint8_t timerFlag = 0;
 //************* Setup *************
 
 void setup() {
-  stepper1.setMaxSpeed(500.0);
-  stepper1.setAcceleration(200.0);
+  stepper1.setMaxSpeed(5.0);
+  stepper1.setAcceleration(100.0);
   stepper1.setSpeed(100);
-  stepper1.moveTo(5000);
+  stepper1.moveTo(400);
 
+  TCCR2A = 0;// set entire TCCR2A register to 0
+  TCCR2B = 0;// same for TCCR2B
+  TCNT2  = 0;//initialize counter value to 0
+  // set compare match register for 8khz increments
+  OCR2A = 61;// = Count to 60. With PSK at 256 this = ~1.0ms between interrupts (must be <256)
+  // turn on CTC mode
+  TCCR2A |= (1 << WGM21);
+  // Set CS22 bit for 256 prescaler
+  TCCR2B |= (1 << CS22);
+  TCCR2B |= (1 << CS21);
+  //TCCR2B |= (1 << CS20); //Enables 1024
+  // enable timer compare interrupt
+  TIMSK2 |= (1 << OCIE2A);
 
-  Serial.begin(9600);
+  Serial.begin(115200);
   delay(500);
 
   LcdInitialise();
@@ -158,42 +173,55 @@ void loop() {
   if (stepper1.distanceToGo() == 0) {
     stepper1.moveTo(-stepper1.currentPosition());
   }
-  stepper1.run();
-
-  if((millis() - lastPrint) > 500){
-    sprintf(lcdCharArr,"To go   %iHz",stepper1.distanceToGo());
-    LcdPrint(lcdCharArr);  
+  //stepper1.run();
+  
+  if((millis() - lastPrint) > 333){
+    _UpdateMenu();
+    lastPrint = millis();
+    
   }
 }
 
 //************* Stepper Helpers *************
 
+//************* Menu Helpers *************
 
-//************* LCD Helpers *************
-
-void LcdPrint(char *characters){
-  int i = 0, stillChars = 1;
-
-  for (i = 0; i < 72; i++){
-    if (stillChars){
-      if (*characters == '\0'){
-        stillChars = 0;
-        lcdCharArr[i] = 32;
-      }
-      else{
-        lcdCharArr[i] = *characters++;
-      }
-    }
-    else{
-      lcdCharArr[i] = 32;
-    }
-    
-  }
-  lcdCharArr[i] = '\0';
-
-  LcdString(lcdCharArr);
+void _UpdateMenu(){
+  char * buff = lcdCharArr;
+  buff =  _PutHeaderInBuffer(buff, "Set Dist");
+  sprintf(buff,"To go: %i",stepper1.distanceToGo());
+  LcdPrint(lcdCharArr);  
 }
 
+char * _PutHeaderInBuffer(char * buff, char * msg){
+  uint8_t len = strlen(msg);
+  uint8_t spacesBeforeAndAfter = (12 - len) / 2;
+  uint8_t i = 0;
+  for(i = 0; i < spacesBeforeAndAfter; i++){
+    *buff++ = '-';
+  }
+  for(i = 0; i < len; i++){
+    *buff++ = *msg++;
+  }
+  for(i = 0; i < spacesBeforeAndAfter; i++){
+    *buff++ = '-';
+  }
+  if(len % 2){ //If odd, add another space
+    *buff++ = 32;
+  }
+  return buff;
+}
+
+char * _PutStringInBuffer(char * buff, char * msg){
+  uint8_t len = strlen(msg);
+  
+  while(*msg != 0){
+    *buff++ = *msg++;
+  }
+  return buff;
+}
+
+//************* LCD Helpers *************
 
 //Work in progress
 char * LcdFixSpaces(char *characters){
@@ -207,16 +235,6 @@ char * LcdFixSpaces(char *characters){
     totalCount++;
     charCount++;
   }
-}
-
-void LcdCharacter(char character)
-{
-  LcdWrite(LCD_D, 0x00);
-  for (int index = 0; index < 5; index++)
-  {
-    LcdWrite(LCD_D, ASCII[character - 0x20][index]);
-  }
-  LcdWrite(LCD_D, 0x00);
 }
 
 void LcdClear(void)
@@ -238,11 +256,35 @@ void LcdInitialise(void)
   digitalWrite(PIN_RESET, HIGH);
   LcdWrite(LCD_C, 0x21 );  // LCD Extended Commands.
   LcdWrite(LCD_C, 0xB6 );  // Set LCD Vop (Contrast). 
-  LcdWrite(LCD_C, 0x04 );  // Set Temp coefficent. //0x04
+  LcdWrite(LCD_C, 0x05 );  // Set Temp coefficent. //0x04
   LcdWrite(LCD_C, 0x14 );  // LCD bias mode 1:48. //0x13
   LcdWrite(LCD_C, 0x20 );  // LCD Basic Commands
   LcdWrite(LCD_C, 0x0C );  // LCD in normal mode.
 
+}
+
+void LcdPrint(char *characters){
+  int i = 0, stillChars = 1;
+
+  for (i = 0; i < 72; i++){
+    if (stillChars){
+      if (*characters == '\0'){
+        stillChars = 0;
+        lcdCharArr[i] = 32;
+      }
+      else{
+        lcdCharArr[i] = *characters++;
+      }
+    }
+    else{
+      lcdCharArr[i] = 32;
+    }
+    
+  }
+  lcdCharArr[i] = '\0';
+  
+  LcdString(lcdCharArr);
+  
 }
 
 void LcdString(char *characters)
@@ -253,13 +295,46 @@ void LcdString(char *characters)
   }
 }
 
+void LcdCharacter(char character)
+{
+  LcdWrite(LCD_D, 0x00);
+  for (int index = 0; index < 5; index++)
+  {
+    LcdWrite(LCD_D, ASCII[character - 0x20][index]);
+  }
+  LcdWrite(LCD_D, 0x00);
+}
+
 void LcdWrite(byte dc, byte data)
 {
-  digitalWrite(PIN_DC, dc);
-  digitalWrite(PIN_SCE, LOW);
+  /* 
+   *  #define PIN_SCE   11 // SCE - Chip select, pin 3 on LCD.
+      #define PIN_RESET 10 // RST - Reset, pin 4 on LCD.
+      #define PIN_DC    9 // DC - Data/Command, pin 5 on LCD.
+      #define PIN_SDIN  8 // DN(MOSI) - Serial data, pin 6 on LCD.
+      #define PIN_SCLK  7 // SCLK - Serial clock, pin 7 on LCD.
+   */
+   //PORTB = 8-13 (high bits 6 and 7 unused)
+  PORTB = PORTB | (dc << 1); //digitalWrite(PIN_DC, dc);
+  PORTB = PORTB & B110111;   //digitalWrite(PIN_SCE, LOW);
   shiftOut(PIN_SDIN, PIN_SCLK, MSBFIRST, data);
-  digitalWrite(PIN_SCE, HIGH);
+  PORTB = PORTB | B001000;   //digitalWrite(PIN_SCE, HIGH);
 }
 
 
 //************* ISR *************
+
+//*****************ISR********************
+ISR(TIMER2_COMPA_vect)        // interrupt service routine that wraps a user defined function supplied by attachInterrupt
+{
+  //static unsigned long count = 0;
+  stepper1.run();
+  //if (count == 100){
+    //count = 0;
+    //timerFlag = 1;
+    //return;
+  //}
+  //count++;
+}
+
+
