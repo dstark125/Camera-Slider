@@ -129,14 +129,22 @@ static const byte ASCII[][5] =
 ,{0x78, 0x46, 0x41, 0x46, 0x78} // 7f →
 };
 
-const char *menuItems[5] = {
+
+const char *menuItems[4] = {
   "Status",
   "Set Speed",
   "Set Pos",
-  "Save Cfg",
-  "Item 5"
+  "Save Cfg"
 };
-const uint8_t numMenuItems = 5;
+const uint8_t numMenuItems = 4;
+
+typedef enum screens_e{
+  SCREEN_STARTSTOP,
+	SCREEN_STATUS,
+	SCREEN_SPEED,
+	SCREEN_POS,
+	SCREEN_SAVE,
+} screens_t;
 
 typedef enum buttonPress_e{
   BUT_NONE,
@@ -150,6 +158,13 @@ typedef enum buttonPress_e{
 // Initialize with pin sequence IN1-IN3-IN2-IN4 for using the AccelStepper with 28BYJ-48
 AccelStepper stepper1(FULL4WIRE, motorPin1, motorPin3, motorPin2, motorPin4);
 
+//************* Status Stuff *************
+bool isRunning = false;
+unsigned long cycleTime = 600;
+unsigned long lengthInSteps =  10000; //36mm dia, 600mm rods, 4096 steps/rotation
+unsigned long startTime;
+float stepsPerSecond = lengthInSteps / cycleTime;
+
 //************* Other Pins *************
 
 volatile unsigned long diff = 0;
@@ -160,10 +175,10 @@ void setup() {
   pinMode(LOWER_BUTTON_PIN, INPUT);
   pinMode(UPPER_BUTTON_PIN, INPUT);
   
-  stepper1.setMaxSpeed(0.5);
+  stepper1.setMaxSpeed(5.0);
   stepper1.setAcceleration(100.0);
   stepper1.setSpeed(100);
-  stepper1.moveTo(400);
+  stepper1.moveTo(lengthInSteps);
 
   TCCR2A = 0;// set entire TCCR2A register to 0
   TCCR2B = 0;// same for TCCR2B
@@ -180,35 +195,42 @@ void setup() {
   TIMSK2 |= (1 << OCIE2A);
 
   Serial.begin(115200);
-  delay(500);
+  delay(300);
 
   LcdInitialise();
   LcdClear();
   delay(100);
   LcdPrint(lcdCharArr);
-  delay(1500);
+  delay(500);
 }//--(end setup )---
 
 //************* Loop *************
 
 void loop() {
-  static unsigned long lastPrint = millis();
-
+  static screens_t screen = SCREEN_STATUS;
+  
   //Change direction when the stepper reaches the target position
   if (stepper1.distanceToGo() == 0) {
     stepper1.moveTo(-stepper1.currentPosition());
   }
   //stepper1.run();
+   
+  switch (screen){
+	case(SCREEN_STATUS):
+		Serial.println("Showing status");
+		_ShowStatusScreen();
+		break;
+  case(SCREEN_STARTSTOP):
+    Serial.println("Toggling");
+    _ToggleStartStop();
+    break;
+  }
   
-  if((millis() - lastPrint) > 333){
-    _UpdateMenu();
-    lastPrint = millis();
-    
-  }
-  if (_GetButtonPressType(250) == BUT_BOTH){
-    _ShowMenu();
-    _Debounce();
-  }
+  LcdClear();
+  _ClearLcdCharArr();
+  Serial.println("Showing menu");
+  screen = _ShowMenu();
+  _Debounce();
 }
 
 //************* Button Helpers *************
@@ -251,36 +273,109 @@ void _Debounce(){
     return;
 }
 
+
 //************* Stepper Helpers *************
+
+//************* Screen Helpers *************
+
+void _ToggleStartStop(){
+  isRunning = !isRunning;
+  if (isRunning){
+    LcdPrint("Started!");
+  }
+  else{
+    LcdPrint("Stopped!");
+  }
+  delay(1000);
+}
+
+void _ShowStatusScreen(){
+	char * buff = lcdCharArr;
+	char lineBuff[12] = "";
+	unsigned long elapsedTime;
+  int stepsToGo;
+  unsigned long lastPrint = 0;
+	buff =  _PutHeaderInBuffer(buff, "Status");
+	if (isRunning){
+		buff = _PutLineInBuffer(buff, "Running");
+	}
+	else{
+		buff = _PutLineInBuffer(buff, "Stopped");
+	}
+  while (_GetButtonPressType(250) != BUT_BOTH){
+    if ((millis() - lastPrint) > 1000){
+      lastPrint = millis();
+      
+      buff = lcdCharArr + 24;
+      sprintf(lineBuff, "stp/s:%d", stepsPerSecond);
+      buff = _PutLineInBuffer(buff, lineBuff);
+  
+      stepsToGo = stepper1.distanceToGo();
+      sprintf(lineBuff,"To go: %i",stepsToGo);
+      buff = _PutLineInBuffer(buff, lineBuff);
+  
+      elapsedTime = millis() - startTime;
+      sprintf(lineBuff, "Elap: %i", (elapsedTime)/1000);
+      buff = _PutLineInBuffer(buff, lineBuff);
+      
+      sprintf(lineBuff, "Rem:%i", (int)(((float)elapsedTime/1000.0)*((float)stepsToGo/(float)(lengthInSteps-stepsToGo))));
+      buff = _PutLineInBuffer(buff, lineBuff);
+      
+      LcdPrint(lcdCharArr);  
+    }
+  }
+}
+
+void _ClearLcdCharArr(){
+  for(int i = 0; i < 72; i++){
+    lcdCharArr[i] = 0;
+  }
+}
 
 //************* Menu Helpers *************
 
-void _ShowMenu(){
+screens_t _ShowMenu(){
   char * buff = lcdCharArr;
+  char startStopBuff[12] = "";
   char curPointerBuff[12] = "";
-  uint8_t index = 0;
+  int8_t index = -1;
   buttonPress_t but;
-   
+
+  Serial.println("Clearing LCD");
+  _ClearLcdCharArr();
+
+  Serial.println("Making start stop string");
+  if (isRunning){
+    sprintf(startStopBuff, "Stop");
+  }
+  else{
+    sprintf(startStopBuff, "Start");
+  }
+
+  //Serial.println("Filling buff");
   buff =  _PutHeaderInBuffer(buff, "Menu");
-  _SetCursorOnMenuItem(curPointerBuff, menuItems[0]);
+  _SetCursorOnMenuItem(curPointerBuff, startStopBuff);
   buff = _PutLineInBuffer(buff,curPointerBuff);
+  buff =_PutLineInBuffer(buff, menuItems[0]);
   buff =_PutLineInBuffer(buff, menuItems[1]);
   buff =_PutLineInBuffer(buff, menuItems[2]);
   buff =_PutLineInBuffer(buff, menuItems[3]);
-  buff =_PutLineInBuffer(buff, menuItems[4]);
-  
+  //Serial.println("Printing");
   LcdPrint(lcdCharArr);
   _Debounce();
-  
+  //Serial.println("While loop");
   while (1){
     but = _GetButtonPressType(250);
+    //Serial.println(but);
     if (but != BUT_NONE){
       _Debounce();
     }
+    //Serial.println("Checking button press");
+    //delay(500);
     switch(but){
       case(BUT_UP):
         if (index > 0){
-          buff = lcdCharArr + ((index + 1) * 12);
+          buff = lcdCharArr + ((index + 2) * 12);
           _PutLineInBuffer(buff, menuItems[index]);
           index--;
           _SetCursorOnMenuItem(curPointerBuff, menuItems[index]);
@@ -288,11 +383,25 @@ void _ShowMenu(){
           buff = _PutLineInBuffer(buff,curPointerBuff);
           LcdPrint(lcdCharArr);
         }
+        else if (index == 0){ //Need to use the different buffer
+          buff = lcdCharArr + ((index + 2) * 12);
+          _PutLineInBuffer(buff, menuItems[index]);
+          index--;
+          _SetCursorOnMenuItem(curPointerBuff, startStopBuff);
+          buff -= 12;
+          buff = _PutLineInBuffer(buff,curPointerBuff);
+          LcdPrint(lcdCharArr);
+        }
         break;
       case(BUT_DOWN):
-        if (index < 4){
-          buff = lcdCharArr + ((index + 1) * 12);
-          _PutLineInBuffer(buff, menuItems[index]);
+        if (index < 3){
+          buff = lcdCharArr + ((index + 2) * 12);
+          if (index == -1){
+            _PutLineInBuffer(buff, startStopBuff);
+          }
+          else{
+           _PutLineInBuffer(buff, menuItems[index]); 
+          }
           index++;
           _SetCursorOnMenuItem(curPointerBuff, menuItems[index]);
           buff += 12;
@@ -301,8 +410,18 @@ void _ShowMenu(){
         }
         break;
       case(BUT_BOTH):
-        return;
-        break;
+        switch(index){
+  		  case(-1):
+          return SCREEN_STARTSTOP;
+        case(0):
+  				return SCREEN_STATUS;
+  			case(1):
+  				return SCREEN_SPEED;
+  			case(2):
+  				return SCREEN_POS;
+  			case(3):
+  				return SCREEN_SAVE;
+		}
       case(BUT_NONE):
         //Nothing
         break;
@@ -318,9 +437,10 @@ void _UpdateMenu(){
 }
 
 void _SetCursorOnMenuItem(char * buff, const char * item){
-  strcpy(buff, "->");
-  buff += 2;
-  strncpy(buff, item, 10);
+  //strcpy(buff, "->");
+  *buff = '>';
+  buff += 1;
+  strncpy(buff, item, 11);
 }
 
 char * _PutHeaderInBuffer(char * buff, const char * msg){
@@ -399,7 +519,7 @@ void LcdInitialise(void)
 
 }
 
-void LcdPrint(char *characters){
+void LcdPrint(const char *characters){
   int i = 0, stillChars = 1;
 
   for (i = 0; i < 72; i++){
@@ -463,14 +583,9 @@ void LcdWrite(byte dc, byte data)
 //*****************ISR********************
 ISR(TIMER2_COMPA_vect)        // interrupt service routine that wraps a user defined function supplied by attachInterrupt
 {
-  //static unsigned long count = 0;
-  stepper1.run();
-  //if (count == 100){
-    //count = 0;
-    //timerFlag = 1;
-    //return;
-  //}
-  //count++;
+  if (isRunning){
+    stepper1.run();
+  }
 }
 
 
