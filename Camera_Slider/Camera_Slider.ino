@@ -175,25 +175,6 @@ void setup() {
   pinMode(LOWER_BUTTON_PIN, INPUT);
   pinMode(UPPER_BUTTON_PIN, INPUT);
   
-  stepper1.setMaxSpeed(5.0);
-  stepper1.setAcceleration(100.0);
-  stepper1.setSpeed(100);
-  stepper1.moveTo(lengthInSteps);
-
-  TCCR2A = 0;// set entire TCCR2A register to 0
-  TCCR2B = 0;// same for TCCR2B
-  TCNT2  = 0;//initialize counter value to 0
-  // set compare match register for 8khz increments
-  OCR2A = 61;// = Count to 60. With PSK at 256 this = ~1.0ms between interrupts (must be <256)
-  // turn on CTC mode
-  TCCR2A |= (1 << WGM21);
-  // Set CS22 bit for 256 prescaler
-  TCCR2B |= (1 << CS22);
-  TCCR2B |= (1 << CS21);
-  //TCCR2B |= (1 << CS20); //Enables 1024
-  // enable timer compare interrupt
-  TIMSK2 |= (1 << OCIE2A);
-
   Serial.begin(115200);
   delay(300);
 
@@ -223,6 +204,10 @@ void loop() {
   case(SCREEN_STARTSTOP):
     Serial.println("Toggling");
     _ToggleStartStop();
+    break;
+  case(SCREEN_POS):
+    Serial.println("Setting new position");
+    _SetNewPos();
     break;
   }
   
@@ -282,11 +267,124 @@ void _ToggleStartStop(){
   isRunning = !isRunning;
   if (isRunning){
     LcdPrint("Started!");
+    stepper1.setMaxSpeed(5.0);
+    //stepper1.setAcceleration(100.0);
+    stepper1.setSpeed(100);
+    stepper1.moveTo(lengthInSteps);
+    setTimer2Frequency(90);
   }
   else{
+    _disableTimer2Interrupts();
     LcdPrint("Stopped!");
   }
   delay(1000);
+}
+
+void _SetNewPos(){
+  buttonPress_t pressType = BUT_NONE;
+  int32_t totalSteps = 0;
+  char * buff = lcdCharArr;
+  char lineBuff[12] = "";
+  bool change = false;
+  
+  isRunning = false;
+  _disableTimer2Interrupts();
+  _ClearLcdCharArr();
+
+  stepper1.setMaxSpeed(500.0);
+  stepper1.setAcceleration(1000.0);
+  stepper1.setSpeed(500);
+    
+  buff =  _PutHeaderInBuffer(buff, "Set Pos");
+  buff = _PutLineInBuffer(buff, "Set starting");
+  buff = _PutLineInBuffer(buff, "position.");
+  sprintf(lineBuff,"Delta:%6i",totalSteps);
+  _PutLineInBuffer(buff, lineBuff); //Don't increment the buffer so we can rewrite to the same spot
+  LcdPrint(lcdCharArr);
+  
+  _Debounce();
+  
+  while(pressType != BUT_BOTH){
+    pressType = _GetButtonPressType(500);
+    switch(pressType){
+      case(BUT_UP):
+        do{
+          Serial.println("moving up");
+          totalSteps += 250;
+          stepper1.move(250);
+          while(stepper1.distanceToGo() != 0){
+            stepper1.run();
+          }  
+        }while (_GetButtonPressType(0) == BUT_UP);
+        change = true;
+        break;
+      case(BUT_DOWN):
+        do{
+          Serial.println("moving down");
+          stepper1.move(-250);
+          totalSteps -= 250;
+          while(stepper1.distanceToGo() != 0){
+            stepper1.run();
+          }
+        }while (_GetButtonPressType(0) == BUT_DOWN);
+        change = true;
+        break;    
+    }
+    if(change){
+      change = false;
+      sprintf(lineBuff,"Delta:%6i",totalSteps);
+      _PutLineInBuffer(buff, lineBuff); //Don't increment the buffer so we can rewrite to the same spot
+      LcdPrint(lcdCharArr);
+    }
+  }
+
+  Serial.println("Got start, getting end");
+  
+  buff -= 24; //Back up 2 lines
+  buff = _PutLineInBuffer(buff, "Set ending");
+  buff += 24; //Go back to the delta line
+  totalSteps = 0;
+  sprintf(lineBuff,"Delta:%6i",totalSteps);
+  _PutLineInBuffer(buff, lineBuff); //Don't increment the buffer so we can rewrite to the same spot
+  LcdPrint(lcdCharArr);
+  
+  Serial.println("Debouncing");
+  
+  _Debounce();
+
+  while(pressType != BUT_BOTH){
+    pressType = _GetButtonPressType(500);
+    switch(pressType){
+      case(BUT_UP):
+        do{
+          Serial.println("moving up");
+          totalSteps += 250;
+          stepper1.move(250);
+          while(stepper1.distanceToGo() != 0){
+            stepper1.run();
+          }  
+        }while (_GetButtonPressType(0) == BUT_UP);
+        change = true;
+        break;
+      case(BUT_DOWN):
+        do{
+          Serial.println("moving down");
+          stepper1.move(-250);
+          totalSteps -= 250;
+          while(stepper1.distanceToGo() != 0){
+            stepper1.run();
+          }
+        }while (_GetButtonPressType(0) == BUT_DOWN);
+        change = true;
+        break;    
+    }
+    if(change){
+      change = false;
+      sprintf(lineBuff,"Delta:%6i",totalSteps);
+      _PutLineInBuffer(buff, lineBuff); //Don't increment the buffer so we can rewrite to the same spot
+      LcdPrint(lcdCharArr);
+    }
+  }
 }
 
 void _ShowStatusScreen(){
@@ -302,23 +400,23 @@ void _ShowStatusScreen(){
 	else{
 		buff = _PutLineInBuffer(buff, "Stopped");
 	}
-  while (_GetButtonPressType(250) != BUT_BOTH){
+  while (_GetButtonPressType(500) != BUT_BOTH){
     if ((millis() - lastPrint) > 1000){
       lastPrint = millis();
       
       buff = lcdCharArr + 24;
-      sprintf(lineBuff, "stp/s:%d", stepsPerSecond);
+      sprintf(lineBuff, "stp/s:%6d", stepsPerSecond);
       buff = _PutLineInBuffer(buff, lineBuff);
   
       stepsToGo = stepper1.distanceToGo();
-      sprintf(lineBuff,"To go: %i",stepsToGo);
+      sprintf(lineBuff,"To go:%6i",stepsToGo);
       buff = _PutLineInBuffer(buff, lineBuff);
   
       elapsedTime = millis() - startTime;
-      sprintf(lineBuff, "Elap: %i", (elapsedTime)/1000);
+      sprintf(lineBuff, "Elap:%7i", (elapsedTime)/1000);
       buff = _PutLineInBuffer(buff, lineBuff);
       
-      sprintf(lineBuff, "Rem:%i", (int)(((float)elapsedTime/1000.0)*((float)stepsToGo/(float)(lengthInSteps-stepsToGo))));
+      sprintf(lineBuff, "Rem:%8i", (int)(((float)elapsedTime/1000.0)*((float)stepsToGo/(float)(lengthInSteps-stepsToGo))));
       buff = _PutLineInBuffer(buff, lineBuff);
       
       LcdPrint(lcdCharArr);  
@@ -580,6 +678,95 @@ void LcdWrite(byte dc, byte data)
 
 //************* ISR *************
 
+//Seems as though ~78hz is the min frequency
+void setTimer2Frequency(uint16_t freq){
+  uint16_t preScaler = 64; //Start here, frequency should be under a large amount of KHZ
+  uint8_t count = 1;
+  uint32_t valNeeded = 0;
+  bool found = false;
+  
+  while(!found && (preScaler <= 1024)){
+    //Real clock is 16Mhz, but dividing by 100 so that the math will fit in the registers
+    valNeeded = 160000 / ((float)(preScaler/10) * (float)(freq/10));
+    Serial.print("Trying: ");
+    Serial.println(valNeeded);
+    if (valNeeded < 20 || valNeeded > 255){ //If it is not in appropriate range for our counter
+      preScaler *= 4;
+    }
+    else{
+      found = true;
+    }
+  }
+  if(found){
+    Serial.print("Frequency: ");
+    Serial.println(freq);
+    Serial.print("Prescaler: ");
+    Serial.println(preScaler);
+    Serial.print("Counter: ");
+    Serial.println(valNeeded);
+    count = (uint8_t)valNeeded;
+  }
+  else{
+    Serial.print("Could not find a value for frequency: ");
+    Serial.println(freq);
+    Serial.print("Prescaler: ");
+    Serial.println(preScaler);
+    Serial.print("Counter: ");
+    Serial.println(valNeeded);
+    return;
+  }
+  
+  
+  TCCR2A = 0;// set entire TCCR2A register to 0
+  TCCR2B = 0;// same for TCCR2B
+  TCNT2  = 0;//initialize counter value to 0
+
+  // turn on CTC mode
+  TCCR2A |= (1 << WGM21);
+  
+  // set compare match register for increments
+  OCR2A = valNeeded;
+  
+  /*Prescalers:
+   * PreScale | CS22 | CS21 | CS20
+   * 1          0      0      1
+   * 8          0      1      0
+   * 64         0      1      1
+   * 256        1      0      0
+   * 1024       1      0      1
+   */
+  switch(preScaler){
+    case(1):
+      TCCR2B |= (1 << CS20);
+      break;
+    case(8):
+      TCCR2B |= (1 << CS21);
+      break;
+    case(64):
+      TCCR2B |= (1 << CS21);
+      TCCR2B |= (1 << CS20);
+      break;
+    case(256):
+      TCCR2B |= (1 << CS22);
+      break;
+    case(1024):
+      TCCR2B |= (1 << CS22);
+      TCCR2B |= (1 << CS20);
+      break;
+  }
+
+  _enableTimer2Interrupts();
+}
+
+void _disableTimer2Interrupts(){
+  // enable timer compare interrupt
+  TIMSK2 &= ~(1 << OCIE2A);
+}
+
+void _enableTimer2Interrupts(){
+  // enable timer compare interrupt
+  TIMSK2 |= (1 << OCIE2A);
+}
 //*****************ISR********************
 ISR(TIMER2_COMPA_vect)        // interrupt service routine that wraps a user defined function supplied by attachInterrupt
 {
