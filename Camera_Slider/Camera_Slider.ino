@@ -27,7 +27,7 @@
 #define motorPin4  6     // IN4 on the ULN2003 driver 1
 
 
-char lcdCharArr[73] = "Welcome to the camera slider!";
+char lcdCharArr[73] = "Starting...";
 
 static const byte ASCII[][5] =
 {
@@ -105,7 +105,7 @@ static const byte ASCII[][5] =
 ,{0x0c, 0x52, 0x52, 0x52, 0x3e} // 67 g
 ,{0x7f, 0x08, 0x04, 0x04, 0x78} // 68 h
 ,{0x00, 0x44, 0x7d, 0x40, 0x00} // 69 i
-,{0x20, 0x40, 0x44, 0x3d, 0x00} // 6a j 
+,{0x20, 0x40, 0x44, 0x3d, 0x00} // 6a j
 ,{0x7f, 0x10, 0x28, 0x44, 0x00} // 6b k
 ,{0x00, 0x41, 0x7f, 0x40, 0x00} // 6c l
 ,{0x7c, 0x04, 0x18, 0x04, 0x78} // 6d m
@@ -151,17 +151,18 @@ typedef enum buttonPress_e{
   BUT_UP,
   BUT_DOWN,
   BUT_BOTH
-}buttonPress_t;
+} buttonPress_t;
 
 //************* MOTOR Stuff *************
 
 // Initialize with pin sequence IN1-IN3-IN2-IN4 for using the AccelStepper with 28BYJ-48
-AccelStepper stepper1(FULL4WIRE, motorPin1, motorPin3, motorPin2, motorPin4);
+AccelStepper stepper(FULL4WIRE, motorPin1, motorPin3, motorPin2, motorPin4);
 
 //************* Status Stuff *************
 bool isRunning = false;
 unsigned long cycleTime = 600;
 unsigned long lengthInSteps =  10000; //36mm dia, 600mm rods, 4096 steps/rotation
+unsigned long curPos = 0; 
 unsigned long startTime;
 float stepsPerSecond = lengthInSteps / cycleTime;
 
@@ -174,6 +175,8 @@ volatile uint8_t timerFlag = 0;
 void setup() {
   pinMode(LOWER_BUTTON_PIN, INPUT);
   pinMode(UPPER_BUTTON_PIN, INPUT);
+
+  stepper.setMaxSpeed(500.0);
   
   Serial.begin(115200);
   delay(300);
@@ -182,20 +185,20 @@ void setup() {
   LcdClear();
   delay(100);
   LcdPrint(lcdCharArr);
-  delay(500);
+  delay(100);
 }//--(end setup )---
 
 //************* Loop *************
 
 void loop() {
   static screens_t screen = SCREEN_STATUS;
+
+  //LcdClear();
+  //_ClearLcdCharArr();
+  Serial.println("Showing menu");
+  screen = _ShowMenu();
+  _Debounce();
   
-  //Change direction when the stepper reaches the target position
-  if (stepper1.distanceToGo() == 0) {
-    stepper1.moveTo(-stepper1.currentPosition());
-  }
-  //stepper1.run();
-   
   switch (screen){
 	case(SCREEN_STATUS):
 		Serial.println("Showing status");
@@ -204,6 +207,9 @@ void loop() {
   case(SCREEN_STARTSTOP):
     Serial.println("Toggling");
     _ToggleStartStop();
+    if (isRunning){
+      _ShowStatusScreen();
+    }
     break;
   case(SCREEN_POS):
     Serial.println("Setting new position");
@@ -211,17 +217,13 @@ void loop() {
     break;
   }
   
-  LcdClear();
-  _ClearLcdCharArr();
-  Serial.println("Showing menu");
-  screen = _ShowMenu();
-  _Debounce();
+  
 }
 
 //************* Button Helpers *************
 
 buttonPress_t _GetButtonPressType(uint16_t frame){
-  unsigned long startTime = millis();
+  unsigned long strtT = millis();
   bool lowBPressed = digitalRead(LOWER_BUTTON_PIN);
   bool uppBPressed = digitalRead(UPPER_BUTTON_PIN);
   bool bothPressed = false;
@@ -232,18 +234,24 @@ buttonPress_t _GetButtonPressType(uint16_t frame){
   }
   else if(lowBPressed){
     stat = BUT_DOWN;
-    while ((millis() - startTime) < frame){
+    while ((millis() - strtT) < frame){
       if (digitalRead(UPPER_BUTTON_PIN)){
         stat = BUT_BOTH;
+        break;
+      }
+      else if (digitalRead(LOWER_BUTTON_PIN) == LOW){ //Check for release
         break;
       }
     }
   }
   else if(uppBPressed){
     stat = BUT_UP;
-    while ((millis() - startTime) < frame){
+    while ((millis() - strtT) < frame){
       if (digitalRead(LOWER_BUTTON_PIN)){
         stat = BUT_BOTH;
+        break;
+      }
+      else if (digitalRead(UPPER_BUTTON_PIN) == LOW){ //Check for release
         break;
       }
     }
@@ -261,17 +269,17 @@ void _Debounce(){
 
 //************* Stepper Helpers *************
 
+
 //************* Screen Helpers *************
 
 void _ToggleStartStop(){
   isRunning = !isRunning;
   if (isRunning){
     LcdPrint("Started!");
-    stepper1.setMaxSpeed(5.0);
-    //stepper1.setAcceleration(100.0);
-    stepper1.setSpeed(100);
-    stepper1.moveTo(lengthInSteps);
-    setTimer2Frequency(90);
+    stepper.reset();
+    stepper.setSpeed(100.0);
+    setTimer2Frequency(400);
+    startTime = millis();
   }
   else{
     _disableTimer2Interrupts();
@@ -282,7 +290,8 @@ void _ToggleStartStop(){
 
 void _SetNewPos(){
   buttonPress_t pressType = BUT_NONE;
-  int32_t totalSteps = 0;
+  long totalSteps = 0;
+  long stepsThisTime = 0;
   char * buff = lcdCharArr;
   char lineBuff[12] = "";
   bool change = false;
@@ -290,10 +299,8 @@ void _SetNewPos(){
   isRunning = false;
   _disableTimer2Interrupts();
   _ClearLcdCharArr();
-
-  stepper1.setMaxSpeed(500.0);
-  stepper1.setAcceleration(1000.0);
-  stepper1.setSpeed(500);
+  
+  LcdPrint("Initializing");
     
   buff =  _PutHeaderInBuffer(buff, "Set Pos");
   buff = _PutLineInBuffer(buff, "Set starting");
@@ -308,27 +315,29 @@ void _SetNewPos(){
     pressType = _GetButtonPressType(500);
     switch(pressType){
       case(BUT_UP):
-        do{
-          Serial.println("moving up");
-          totalSteps += 250;
-          stepper1.move(250);
-          while(stepper1.distanceToGo() != 0){
-            stepper1.run();
-          }  
-        }while (_GetButtonPressType(0) == BUT_UP);
+        stepper.reset();
+        stepsThisTime = 0;
+        stepper.setSpeed(400.0);
+        while(_GetButtonPressType(0) == BUT_UP){
+          if (stepper.runSpeed()){
+            stepsThisTime++;
+          }
+        }
+        totalSteps += stepsThisTime;
         change = true;
         break;
       case(BUT_DOWN):
-        do{
-          Serial.println("moving down");
-          stepper1.move(-250);
-          totalSteps -= 250;
-          while(stepper1.distanceToGo() != 0){
-            stepper1.run();
+        stepper.reset();
+        stepsThisTime = 0;
+        stepper.setSpeed(-400.0);
+        while(_GetButtonPressType(0) == BUT_DOWN){
+          if (stepper.runSpeed()){
+            stepsThisTime--;
           }
-        }while (_GetButtonPressType(0) == BUT_DOWN);
+        }
+        totalSteps += stepsThisTime;
         change = true;
-        break;    
+        break;
     }
     if(change){
       change = false;
@@ -339,11 +348,16 @@ void _SetNewPos(){
   }
 
   Serial.println("Got start, getting end");
-  
-  buff -= 24; //Back up 2 lines
-  buff = _PutLineInBuffer(buff, "Set ending");
-  buff += 24; //Go back to the delta line
+
+  curPos = 0; //We are now at the starting position
+  pressType = BUT_NONE;
   totalSteps = 0;
+  stepsThisTime = 0;
+  
+  buff = lcdCharArr; //Start over
+  buff =  _PutHeaderInBuffer(buff, "Set Pos");
+  buff = _PutLineInBuffer(buff, "Set ending");
+  buff = _PutLineInBuffer(buff, "position.");
   sprintf(lineBuff,"Delta:%6i",totalSteps);
   _PutLineInBuffer(buff, lineBuff); //Don't increment the buffer so we can rewrite to the same spot
   LcdPrint(lcdCharArr);
@@ -351,38 +365,57 @@ void _SetNewPos(){
   Serial.println("Debouncing");
   
   _Debounce();
-
+  
   while(pressType != BUT_BOTH){
     pressType = _GetButtonPressType(500);
     switch(pressType){
       case(BUT_UP):
-        do{
-          Serial.println("moving up");
-          totalSteps += 250;
-          stepper1.move(250);
-          while(stepper1.distanceToGo() != 0){
-            stepper1.run();
-          }  
-        }while (_GetButtonPressType(0) == BUT_UP);
+        stepper.reset();
+        stepsThisTime = 0;
+        stepper.setSpeed(400.0);
+        while(_GetButtonPressType(0) == BUT_UP){
+          if (stepper.runSpeed()){
+            stepsThisTime++;
+          }
+        }
+        totalSteps += stepsThisTime;
         change = true;
         break;
       case(BUT_DOWN):
-        do{
-          Serial.println("moving down");
-          stepper1.move(-250);
-          totalSteps -= 250;
-          while(stepper1.distanceToGo() != 0){
-            stepper1.run();
+        stepper.reset();
+        stepsThisTime = 0;
+        stepper.setSpeed(-400.0);
+        while(_GetButtonPressType(0) == BUT_DOWN){
+          if (stepper.runSpeed()){
+            stepsThisTime--;
           }
-        }while (_GetButtonPressType(0) == BUT_DOWN);
+        }
+        totalSteps += stepsThisTime;
         change = true;
-        break;    
+        break;
     }
     if(change){
       change = false;
       sprintf(lineBuff,"Delta:%6i",totalSteps);
       _PutLineInBuffer(buff, lineBuff); //Don't increment the buffer so we can rewrite to the same spot
       LcdPrint(lcdCharArr);
+    }
+  }
+
+  lengthInSteps = totalSteps; //Save total steps
+  
+  //Now, wind backwards
+  LcdPrint("Rewinding..");
+  stepper.reset();
+  stepper.setSpeed(-400.0);
+  stepsThisTime = totalSteps;
+  Serial.print("Rewinding ");
+  Serial.print(stepsThisTime);
+  Serial.println(" steps");
+  while (stepsThisTime != 0){
+    if (stepper.runSpeed()){
+        stepsThisTime--;
+        
     }
   }
 }
@@ -400,26 +433,43 @@ void _ShowStatusScreen(){
 	else{
 		buff = _PutLineInBuffer(buff, "Stopped");
 	}
-  while (_GetButtonPressType(500) != BUT_BOTH){
-    if ((millis() - lastPrint) > 1000){
-      lastPrint = millis();
-      
-      buff = lcdCharArr + 24;
-      sprintf(lineBuff, "stp/s:%6d", stepsPerSecond);
-      buff = _PutLineInBuffer(buff, lineBuff);
+  buff = _PutLineInBuffer(buff, "stp/s:------");
+  buff = _PutLineInBuffer(buff, "To go:------");
+  buff = _PutLineInBuffer(buff, "Elap:-------");
+  buff = _PutLineInBuffer(buff, "Rem:--------");
+
+  LcdPrint(lcdCharArr);
+
+  _Debounce();
   
-      stepsToGo = stepper1.distanceToGo();
-      sprintf(lineBuff,"To go:%6i",stepsToGo);
-      buff = _PutLineInBuffer(buff, lineBuff);
-  
-      elapsedTime = millis() - startTime;
-      sprintf(lineBuff, "Elap:%7i", (elapsedTime)/1000);
-      buff = _PutLineInBuffer(buff, lineBuff);
-      
-      sprintf(lineBuff, "Rem:%8i", (int)(((float)elapsedTime/1000.0)*((float)stepsToGo/(float)(lengthInSteps-stepsToGo))));
-      buff = _PutLineInBuffer(buff, lineBuff);
-      
-      LcdPrint(lcdCharArr);  
+  if(isRunning){
+    while (_GetButtonPressType(500) != BUT_BOTH){
+      if ((millis() - lastPrint) > 1000){
+        lastPrint = millis();
+        
+        buff = lcdCharArr + 24;
+        sprintf(lineBuff, "stp/s:%6f", stepsPerSecond);
+        buff = _PutLineInBuffer(buff, lineBuff);
+    
+        stepsToGo = lengthInSteps - curPos;
+        sprintf(lineBuff,"To go:%6i",stepsToGo);
+        buff = _PutLineInBuffer(buff, lineBuff);
+    
+        elapsedTime = millis() - startTime;
+        sprintf(lineBuff, "Elap:%7i", (elapsedTime)/1000);
+        buff = _PutLineInBuffer(buff, lineBuff);
+        
+        sprintf(lineBuff, "Rem:%8i", (int)(((float)elapsedTime/1000.0)*((float)stepsToGo/(float)(lengthInSteps-stepsToGo))));
+        buff = _PutLineInBuffer(buff, lineBuff);
+        
+        LcdPrint(lcdCharArr);
+      }
+    }
+  }
+  else{
+    Serial.println("Showing blank status");
+    while (_GetButtonPressType(500) != BUT_BOTH){
+      delay(100);
     }
   }
 }
@@ -432,7 +482,7 @@ void _ClearLcdCharArr(){
 
 //************* Menu Helpers *************
 
-screens_t _ShowMenu(){
+screens_t _ShowMenu(void){
   char * buff = lcdCharArr;
   char startStopBuff[12] = "";
   char curPointerBuff[12] = "";
@@ -463,7 +513,7 @@ screens_t _ShowMenu(){
   _Debounce();
   //Serial.println("While loop");
   while (1){
-    but = _GetButtonPressType(250);
+    but = _GetButtonPressType(500);
     //Serial.println(but);
     if (but != BUT_NONE){
       _Debounce();
@@ -530,7 +580,7 @@ screens_t _ShowMenu(){
 void _UpdateMenu(){
   char * buff = lcdCharArr;
   buff =  _PutHeaderInBuffer(buff, "Set Dist");
-  sprintf(buff,"To go: %i",stepper1.distanceToGo());
+  sprintf(buff,"To go: %i",stepper.distanceToGo());
   LcdPrint(lcdCharArr);  
 }
 
@@ -557,10 +607,13 @@ char * _PutHeaderInBuffer(char * buff, const char * msg){
 char * _PutLineInBuffer(char * buff, const char * msg){
   uint8_t len = strlen(msg);
   uint8_t i = 0;
+  if (len > 12){
+    len = 12; //Only 12 chars on string
+  }
   for(i = 0; i < len; i++){
     *buff++ = *msg++;
   }
-  for(i = 12-len; i > 0; i--){ //If odd, add another space
+  for(i = 12-len; i > 0; i--){ //If space remaining, add spaces
     *buff++ = 32;
   }
   return buff;
@@ -770,9 +823,18 @@ void _enableTimer2Interrupts(){
 //*****************ISR********************
 ISR(TIMER2_COMPA_vect)        // interrupt service routine that wraps a user defined function supplied by attachInterrupt
 {
+  //static unsigned long lastT = millis();
+  //unsigned long thisT = millis();
   if (isRunning){
-    stepper1.run();
+    if (stepper.runSpeed()){ //If we actually stepped
+      curPos++;
+      if (curPos >= lengthInSteps){
+        isRunning = false;
+      }
+    }
   }
+  //Serial.println(thisT - lastT);
+  //lastT = thisT;
 }
 
 
