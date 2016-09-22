@@ -129,15 +129,6 @@ static const byte ASCII[][5] =
 ,{0x78, 0x46, 0x41, 0x46, 0x78} // 7f →
 };
 
-
-const char *menuItems[4] = {
-  "Status",
-  "Set Speed",
-  "Set Pos",
-  "Save Cfg"
-};
-const uint8_t numMenuItems = 4;
-
 typedef enum screens_e{
   SCREEN_STARTSTOP,
 	SCREEN_STATUS,
@@ -215,9 +206,11 @@ void loop() {
     Serial.println("Setting new position");
     _SetNewPos();
     break;
-  }
-  
-  
+  case(SCREEN_SPEED):
+    Serial.println("Setting new position");
+    _SetNewDuration();
+    break;
+  }  
 }
 
 //************* Button Helpers *************
@@ -272,6 +265,17 @@ void _Debounce(){
 
 //************* Screen Helpers *************
 
+char _spinChar(){
+  static char c = '|';
+  if (c == '-'){
+    c = '|';
+  }
+  else{
+    c = '-';
+  }
+}
+
+//----------_ToggleStartStop()----------
 void _ToggleStartStop(){
   isRunning = !isRunning;
   if (isRunning){
@@ -288,12 +292,13 @@ void _ToggleStartStop(){
   delay(1000);
 }
 
+//----------_SetNewPos()----------
 void _SetNewPos(){
   buttonPress_t pressType = BUT_NONE;
   long totalSteps = 0;
   long stepsThisTime = 0;
   char * buff = lcdCharArr;
-  char lineBuff[12] = "";
+  char lineBuff[13] = "";
   bool change = false;
   
   isRunning = false;
@@ -420,6 +425,200 @@ void _SetNewPos(){
   }
 }
 
+//----------_SetNewDuration()----------
+void _SetNewDuration(){
+  char * buff = lcdCharArr;
+  int8_t index = 0;
+  buttonPress_t but;
+  char curPointerBuff[13] = "";
+  const char *menuItems[4] = {" Hours", " Minutes", " Seconds", " Done"};
+  //char *menuBuffer[3] = {"            ", "            ", "            "};
+  char menuBuffer[4][13];
+  uint16_t curHour = 0;
+  uint16_t curMin = 0;
+  uint16_t curSec = 0;
+  uint16_t *modPtr;
+  bool canReturn = false;
+  bool adjusting = true;
+  
+  Serial.println("Clearing LCD");
+  _ClearLcdCharArr();
+
+  //Serial.println("Filling buff");
+  buff =  _PutHeaderInBuffer(buff, "Duration");
+  sprintf(menuBuffer[0], "%s:%5u", menuItems[0], curHour);
+  _SetCursorOnMenuItem(curPointerBuff, menuBuffer[0], '>');
+  buff = _PutLineInBuffer(buff, curPointerBuff);
+  sprintf(menuBuffer[1], "%s:%3u", menuItems[1], curMin);
+  buff = _PutLineInBuffer(buff,menuBuffer[1]);
+  sprintf(menuBuffer[2], "%s:%3u", menuItems[2], curSec);
+  buff = _PutLineInBuffer(buff,menuBuffer[2]);
+  sprintf(menuBuffer[3], "%s", menuItems[3]);
+  buff = _PutLineInBuffer(buff,menuBuffer[3]);
+  
+  LcdPrint(lcdCharArr);
+  _Debounce();
+
+  while (!canReturn){
+    but = _GetButtonPressType(500);
+    if (but != BUT_NONE){
+      _Debounce();
+    }
+    switch(but){
+      case(BUT_UP):
+        if (index > 0){
+          buff = lcdCharArr + ((index + 1) * 12);
+          _PutLineInBuffer(buff, menuBuffer[index]);
+          index--;
+          Serial.println(index);
+          Serial.println(menuBuffer[index]);
+          _SetCursorOnMenuItem(curPointerBuff, menuBuffer[index], '>');
+          buff -= 12;
+          _PutLineInBuffer(buff, curPointerBuff);
+          LcdPrint(lcdCharArr);
+        }
+        break;
+      case(BUT_DOWN):
+        if (index < 3){
+          buff = lcdCharArr + ((index + 1) * 12);
+           _PutLineInBuffer(buff, menuBuffer[index]); 
+           index++;
+           Serial.println(index);
+           Serial.println(menuBuffer[index]);
+          _SetCursorOnMenuItem(curPointerBuff, menuBuffer[index], '>');
+          buff += 12;
+          _PutLineInBuffer(buff, curPointerBuff);
+          LcdPrint(lcdCharArr);
+        }
+        break;
+      case(BUT_BOTH):
+        //START OF BUT_BOTH CASE
+        if (index == 3){
+          canReturn = true;
+        }
+        else{
+          buff = lcdCharArr + ((index + 1) * 12);
+          while(!canReturn && adjusting){
+            but = _GetButtonPressType(500);
+            switch(but){
+            case(BUT_UP):
+              switch(index){
+              case(0):
+                curHour++;
+                sprintf(menuBuffer[index], "%c%s:%5u", _spinChar(), menuItems[index]+1, curHour);
+                break;
+              case(1):
+                curMin++;
+                sprintf(menuBuffer[index], "%c%s:%3u", _spinChar(), menuItems[index]+1, curMin);
+                break;
+              case(2):
+                curSec++;
+                sprintf(menuBuffer[index], "%c%s:%3u", _spinChar(), menuItems[index]+1, curSec);
+                break;
+              }
+              _PutLineInBuffer(buff,menuBuffer[index]);
+              LcdPrint(lcdCharArr);
+              while(_GetButtonPressType(0) == BUT_UP){
+                switch(index){
+                case(0):
+                  if (curHour < 96){
+                    curHour++;  
+                  }
+                  sprintf(menuBuffer[index], "%c%s:%5u", _spinChar(), menuItems[index]+1, curHour);
+                  break;
+                case(1):
+                  if (curMin < 60){
+                    curMin++;  
+                  }
+                  sprintf(menuBuffer[index], "%c%s:%3u", _spinChar(), menuItems[index]+1, curMin);
+                  break;
+                case(2):
+                  if (curSec < 60){
+                    curSec++;  
+                  }
+                  sprintf(menuBuffer[index], "%c%s:%3u", _spinChar(), menuItems[index]+1, curSec);
+                  break;
+                }
+                delay(100);
+                _PutLineInBuffer(buff,menuBuffer[index]);
+                LcdPrint(lcdCharArr);
+              }
+              break;
+            case(BUT_DOWN):
+              switch(index){
+              case(0):
+                curHour--; 
+                sprintf(menuBuffer[index], "%c%s:%5u", _spinChar(), menuItems[index]+1, curHour);
+                break;
+              case(1):
+                curMin--; 
+                sprintf(menuBuffer[index], "%c%s:%3u", _spinChar(), menuItems[index]+1, curMin);
+                break;
+              case(2):
+                curSec--;
+                sprintf(menuBuffer[index], "%c%s:%3u", _spinChar(), menuItems[index]+1, curSec);
+                break;
+              }
+              _PutLineInBuffer(buff,menuBuffer[index]);
+              LcdPrint(lcdCharArr);
+              while(_GetButtonPressType(0) == BUT_DOWN){
+                switch(index){
+                case(0):
+                  if (curHour != 0){
+                    curHour--;  
+                  }
+                  sprintf(menuBuffer[index], "%c%s:%5u", _spinChar(), menuItems[index]+1, curHour);
+                  break;
+                case(1):
+                  if (curMin != 0){
+                    curMin--;  
+                  }
+                  sprintf(menuBuffer[index], "%c%s:%3u", _spinChar(), menuItems[index]+1, curMin);
+                  break;
+                case(2):
+                  if (curSec != 0){
+                    curSec--;  
+                  }
+                  sprintf(menuBuffer[index], "%c%s:%3u", _spinChar(), menuItems[index]+1, curSec);
+                  break;
+                }
+                delay(100);
+                _PutLineInBuffer(buff,menuBuffer[index]);
+                LcdPrint(lcdCharArr);
+              }
+              break;
+            case(BUT_BOTH):
+                Serial.println("Not adjusting");
+                if (index == 0){
+                  sprintf(menuBuffer[index], "%s:%5u", menuItems[index], curHour);
+                }
+                else if(index == 1 || index == 2){
+                  sprintf(menuBuffer[index], "%s:%3u", menuItems[index], curHour);
+                }
+                _SetCursorOnMenuItem(curPointerBuff, menuBuffer[index], '>');
+                _PutLineInBuffer(buff, curPointerBuff);
+                LcdPrint(lcdCharArr);
+                adjusting = false;
+                _Debounce();
+              break;
+            case(BUT_NONE):
+              //Nothing
+              break;
+            }
+          }
+          adjusting = true;
+        }
+        Serial.println("Breaking out of both button press case");
+        break;
+        //END OF BUT_BOTH CASE
+      case(BUT_NONE):
+        //Nothing
+        break;
+    }
+  }
+}
+
+//----------_ShowStatusScreen()----------
 void _ShowStatusScreen(){
 	char * buff = lcdCharArr;
 	char lineBuff[12] = "";
@@ -474,6 +673,7 @@ void _ShowStatusScreen(){
   }
 }
 
+//----------_ClearLcdCharArr()----------
 void _ClearLcdCharArr(){
   for(int i = 0; i < 72; i++){
     lcdCharArr[i] = 0;
@@ -482,27 +682,29 @@ void _ClearLcdCharArr(){
 
 //************* Menu Helpers *************
 
+//----------_ShowMenu()----------
 screens_t _ShowMenu(void){
   char * buff = lcdCharArr;
-  char startStopBuff[12] = "";
-  char curPointerBuff[12] = "";
+  char startStopBuff[13] = "";
+  char curPointerBuff[13] = "";
   int8_t index = -1;
   buttonPress_t but;
-
+  const char *menuItems[4] = {" Status", " Set Time", " Set Limits", " Save Config"};
+ 
   Serial.println("Clearing LCD");
   _ClearLcdCharArr();
 
   Serial.println("Making start stop string");
   if (isRunning){
-    sprintf(startStopBuff, "Stop");
+    sprintf(startStopBuff, " Stop");
   }
   else{
-    sprintf(startStopBuff, "Start");
+    sprintf(startStopBuff, " Start");
   }
 
   //Serial.println("Filling buff");
   buff =  _PutHeaderInBuffer(buff, "Menu");
-  _SetCursorOnMenuItem(curPointerBuff, startStopBuff);
+  _SetCursorOnMenuItem(curPointerBuff, startStopBuff, '>');
   buff = _PutLineInBuffer(buff,curPointerBuff);
   buff =_PutLineInBuffer(buff, menuItems[0]);
   buff =_PutLineInBuffer(buff, menuItems[1]);
@@ -526,7 +728,7 @@ screens_t _ShowMenu(void){
           buff = lcdCharArr + ((index + 2) * 12);
           _PutLineInBuffer(buff, menuItems[index]);
           index--;
-          _SetCursorOnMenuItem(curPointerBuff, menuItems[index]);
+          _SetCursorOnMenuItem(curPointerBuff, menuItems[index], '>');
           buff -= 12;
           buff = _PutLineInBuffer(buff,curPointerBuff);
           LcdPrint(lcdCharArr);
@@ -535,7 +737,7 @@ screens_t _ShowMenu(void){
           buff = lcdCharArr + ((index + 2) * 12);
           _PutLineInBuffer(buff, menuItems[index]);
           index--;
-          _SetCursorOnMenuItem(curPointerBuff, startStopBuff);
+          _SetCursorOnMenuItem(curPointerBuff, startStopBuff, '>');
           buff -= 12;
           buff = _PutLineInBuffer(buff,curPointerBuff);
           LcdPrint(lcdCharArr);
@@ -551,7 +753,7 @@ screens_t _ShowMenu(void){
            _PutLineInBuffer(buff, menuItems[index]); 
           }
           index++;
-          _SetCursorOnMenuItem(curPointerBuff, menuItems[index]);
+          _SetCursorOnMenuItem(curPointerBuff, menuItems[index], '>');
           buff += 12;
           buff = _PutLineInBuffer(buff,curPointerBuff);
           LcdPrint(lcdCharArr);
@@ -584,10 +786,11 @@ void _UpdateMenu(){
   LcdPrint(lcdCharArr);  
 }
 
-void _SetCursorOnMenuItem(char * buff, const char * item){
+void _SetCursorOnMenuItem(char * buff, const char * item, char c){
   //strcpy(buff, "->");
-  *buff = '>';
-  buff += 1;
+  *buff = c;
+  buff++; //Move buffer up past the >
+  item++; //Move past the blank space on the item (overwrites first char)
   strncpy(buff, item, 11);
 }
 
