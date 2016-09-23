@@ -159,8 +159,6 @@ float stepsPerSecond = lengthInSteps / cycleTime;
 
 //************* Other Pins *************
 
-volatile unsigned long diff = 0;
-volatile uint8_t timerFlag = 0;
 //************* Setup *************
 
 void setup() {
@@ -279,10 +277,13 @@ char _spinChar(){
 void _ToggleStartStop(){
   isRunning = !isRunning;
   if (isRunning){
+    float newSpeed = (float)(lengthInSteps/10) / (float)(cycleTime/10);
+    Serial.println("Newspeed:");
+    Serial.println(newSpeed);
     LcdPrint("Started!");
     stepper.reset();
-    stepper.setSpeed(100.0);
-    setTimer2Frequency(400);
+    stepper.setSpeed(newSpeed);
+    setTimer2Frequency(constrain(newSpeed * 3, 80, 1200));
     startTime = millis();
   }
   else{
@@ -502,98 +503,59 @@ void _SetNewDuration(){
             but = _GetButtonPressType(500);
             switch(but){
             case(BUT_UP):
-              switch(index){
-              case(0):
-                curHour++;
-                sprintf(menuBuffer[index], "%c%s:%5u", _spinChar(), menuItems[index]+1, curHour);
-                break;
-              case(1):
-                curMin++;
-                sprintf(menuBuffer[index], "%c%s:%3u", _spinChar(), menuItems[index]+1, curMin);
-                break;
-              case(2):
-                curSec++;
-                sprintf(menuBuffer[index], "%c%s:%3u", _spinChar(), menuItems[index]+1, curSec);
-                break;
-              }
-              _PutLineInBuffer(buff,menuBuffer[index]);
-              LcdPrint(lcdCharArr);
-              while(_GetButtonPressType(0) == BUT_UP){
+              do{
                 switch(index){
                 case(0):
-                  if (curHour < 96){
-                    curHour++;  
-                  }
+                  curHour++;
                   sprintf(menuBuffer[index], "%c%s:%5u", _spinChar(), menuItems[index]+1, curHour);
                   break;
                 case(1):
-                  if (curMin < 60){
-                    curMin++;  
-                  }
+                  curMin++;
                   sprintf(menuBuffer[index], "%c%s:%3u", _spinChar(), menuItems[index]+1, curMin);
                   break;
                 case(2):
-                  if (curSec < 60){
-                    curSec++;  
-                  }
+                  curSec++;
                   sprintf(menuBuffer[index], "%c%s:%3u", _spinChar(), menuItems[index]+1, curSec);
                   break;
                 }
-                delay(100);
                 _PutLineInBuffer(buff,menuBuffer[index]);
                 LcdPrint(lcdCharArr);
-              }
+                //delay(25);
+              }while(_GetButtonPressType(0) == BUT_UP);
               break;
             case(BUT_DOWN):
-              switch(index){
-              case(0):
-                curHour--; 
-                sprintf(menuBuffer[index], "%c%s:%5u", _spinChar(), menuItems[index]+1, curHour);
-                break;
-              case(1):
-                curMin--; 
-                sprintf(menuBuffer[index], "%c%s:%3u", _spinChar(), menuItems[index]+1, curMin);
-                break;
-              case(2):
-                curSec--;
-                sprintf(menuBuffer[index], "%c%s:%3u", _spinChar(), menuItems[index]+1, curSec);
-                break;
-              }
-              _PutLineInBuffer(buff,menuBuffer[index]);
-              LcdPrint(lcdCharArr);
-              while(_GetButtonPressType(0) == BUT_DOWN){
+              do{
                 switch(index){
                 case(0):
-                  if (curHour != 0){
-                    curHour--;  
-                  }
+                  curHour--; 
                   sprintf(menuBuffer[index], "%c%s:%5u", _spinChar(), menuItems[index]+1, curHour);
                   break;
                 case(1):
-                  if (curMin != 0){
-                    curMin--;  
-                  }
+                  curMin--; 
                   sprintf(menuBuffer[index], "%c%s:%3u", _spinChar(), menuItems[index]+1, curMin);
                   break;
                 case(2):
-                  if (curSec != 0){
-                    curSec--;  
-                  }
+                  curSec--;
                   sprintf(menuBuffer[index], "%c%s:%3u", _spinChar(), menuItems[index]+1, curSec);
                   break;
                 }
-                delay(100);
                 _PutLineInBuffer(buff,menuBuffer[index]);
                 LcdPrint(lcdCharArr);
-              }
+                //delay(25);
+              }while(_GetButtonPressType(0) == BUT_DOWN);
               break;
             case(BUT_BOTH):
                 Serial.println("Not adjusting");
-                if (index == 0){
+                switch(index){
+                case(0):
                   sprintf(menuBuffer[index], "%s:%5u", menuItems[index], curHour);
-                }
-                else if(index == 1 || index == 2){
-                  sprintf(menuBuffer[index], "%s:%3u", menuItems[index], curHour);
+                  break;
+                case(1):
+                  sprintf(menuBuffer[index], "%s:%3u", menuItems[index], curMin);
+                  break;
+                case(2):
+                  sprintf(menuBuffer[index], "%s:%3u", menuItems[index], curSec);
+                  break;
                 }
                 _SetCursorOnMenuItem(curPointerBuff, menuBuffer[index], '>');
                 _PutLineInBuffer(buff, curPointerBuff);
@@ -616,6 +578,11 @@ void _SetNewDuration(){
         break;
     }
   }
+  if (curHour || curMin || curSec){
+    cycleTime = (curHour * 60 * 60) + (curMin * 60) + curSec;  
+  }
+  Serial.println("Cycle time");
+  Serial.println(cycleTime);
 }
 
 //----------_ShowStatusScreen()----------
