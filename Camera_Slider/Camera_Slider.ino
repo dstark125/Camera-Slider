@@ -18,6 +18,7 @@
 
 #define LOWER_BUTTON_PIN 13
 #define UPPER_BUTTON_PIN 12
+#define LIMIT_BUTTON_PIN 2
 
 #define FULL4WIRE 4
 
@@ -152,6 +153,7 @@ AccelStepper stepper(FULL4WIRE, motorPin1, motorPin3, motorPin2, motorPin4);
 
 //************* Status Stuff *************
 bool isRunning = false;
+bool needsReset = false;
 unsigned long cycleTime = 0;
 unsigned long lengthInSteps =  0;
 unsigned long curPos = 0; 
@@ -160,11 +162,15 @@ float stepsPerSecond = 1;
 
 //************* Other Pins *************
 
+//*********************************
+//*********************************
 //************* Setup *************
-
+//*********************************
+//*********************************
 void setup() {  
   pinMode(LOWER_BUTTON_PIN, INPUT);
   pinMode(UPPER_BUTTON_PIN, INPUT);
+  pinMode(LIMIT_BUTTON_PIN, INPUT);
 
   stepper.setMaxSpeed(500.0);
   
@@ -180,8 +186,12 @@ void setup() {
   delay(100);
 }//--(end setup )---
 
-//************* Loop *************
 
+//********************************
+//********************************
+//************* Loop *************
+//********************************
+//********************************
 void loop() {
   static screens_t screen = SCREEN_STATUS;
 
@@ -198,7 +208,13 @@ void loop() {
 		break;
   case(SCREEN_STARTSTOP):
     Serial.println("Toggling");
-    _ToggleStartStop();
+    if (needsReset && !isRunning){ //It's stopped and needs reset
+      FindHomeOnRaft();
+      needsReset = false;
+    }
+    else{
+      _ToggleStartStop();  
+    }
     if (isRunning){
       _ShowStatusScreen();
     }
@@ -216,6 +232,14 @@ void loop() {
     break;
   }  
 }
+
+//**************************************************
+//**************************************************
+//**************************************************
+//**************************************************
+//**************************************************
+
+
 
 //************* Save / Restore Helpers *************
 
@@ -326,6 +350,16 @@ void _Debounce(){
 
 //************* Stepper Helpers *************
 
+void FindHomeOnRaft(void){
+  LcdPrint("Resetting..");
+  stepper.reset();
+  stepper.setSpeed(-400.0);
+  while(digitalRead(LIMIT_BUTTON_PIN) == LOW){
+    stepper.runSpeed();
+  }
+  LcdPrint("Finished!");
+  delay(1000);
+}
 
 //************* Screen Helpers *************
 
@@ -355,6 +389,7 @@ void _ToggleStartStop(){
     stepper.setSpeed(newSpeed);
     setTimer2Frequency(constrain(newSpeed * 4, 80, 1200));
     startTime = millis();
+    needsReset = true;
   }
   else{
     _disableTimer2Interrupts();
@@ -365,6 +400,121 @@ void _ToggleStartStop(){
 
 //----------_SetNewPos()----------
 void _SetNewPos(){
+  char * buff = lcdCharArr;
+  int8_t index = 0;
+  buttonPress_t but;
+  char curPointerBuff[13] = "";
+  const char *menuItems[2] = {" CM", " Done"};
+  char menuBuffer[2][13];
+  uint16_t curCm = 0;
+  bool canReturn = false;
+  bool adjusting = true;
+  
+  Serial.println("Clearing LCD");
+  _ClearLcdCharArr();
+
+  //Serial.println("Filling buff");
+  buff =  _PutHeaderInBuffer(buff, "Length To Go");
+  sprintf(menuBuffer[0], "%s:%8u", menuItems[0], curCm);
+  _SetCursorOnMenuItem(curPointerBuff, menuBuffer[0], '>');
+  buff = _PutLineInBuffer(buff, curPointerBuff);
+  sprintf(menuBuffer[1], "%s", menuItems[1]);
+  buff = _PutLineInBuffer(buff,menuBuffer[1]);
+  
+  LcdPrint(lcdCharArr);
+  _Debounce();
+
+  while (!canReturn){ //**************************START OF LOOP WHERE WE ARE SELECTING MENU*****
+    but = _GetButtonPressType(500);
+    if (but != BUT_NONE){
+      _Debounce();
+    }
+    switch(but){
+      case(BUT_UP):
+        if (index > 0){
+          buff = lcdCharArr + ((index + 1) * 12);
+          _PutLineInBuffer(buff, menuBuffer[index]);
+          index--;
+          _SetCursorOnMenuItem(curPointerBuff, menuBuffer[index], '>');
+          buff -= 12;
+          _PutLineInBuffer(buff, curPointerBuff);
+          LcdPrint(lcdCharArr);
+        }
+        break;
+      case(BUT_DOWN):
+        if (index < 1){
+          buff = lcdCharArr + ((index + 1) * 12);
+           _PutLineInBuffer(buff, menuBuffer[index]); 
+           index++;
+          _SetCursorOnMenuItem(curPointerBuff, menuBuffer[index], '>');
+          buff += 12;
+          _PutLineInBuffer(buff, curPointerBuff);
+          LcdPrint(lcdCharArr);
+        }
+        break;
+      case(BUT_BOTH):  //**************************START OF CASE WHERE WE ARE ADJUSTING ONE*****
+        //START OF BUT_BOTH CASE
+        if (index == 1){
+          canReturn = true;
+        }
+        else{
+          buff = lcdCharArr + ((index + 1) * 12);
+          sprintf(menuBuffer[index], "%s:%8u", menuItems[index], curCm);
+          _SetCursorOnMenuItem(curPointerBuff, menuBuffer[index], _spinChar());
+          _PutLineInBuffer(buff, curPointerBuff);
+          LcdPrint(lcdCharArr);
+          while(!canReturn && adjusting){
+            but = _GetButtonPressType(500);
+            switch(but){
+            case(BUT_UP):
+              do{
+                if (curCm < 30) curCm++;
+                sprintf(menuBuffer[index], "%s:%8u", menuItems[index], curCm);
+                _PutLineInBuffer(buff,menuBuffer[index]);
+                LcdPrint(lcdCharArr);
+                //delay(25);
+              }while(_GetButtonPressType(0) == BUT_UP);
+              break;
+            case(BUT_DOWN):
+              do{
+                if (curCm < 30) curCm--;
+                sprintf(menuBuffer[index], "%s:%8u", menuItems[index], curCm);
+                _PutLineInBuffer(buff,menuBuffer[index]);
+                LcdPrint(lcdCharArr);
+                //delay(25);
+              }while(_GetButtonPressType(0) == BUT_DOWN);
+              break;
+            case(BUT_BOTH):
+                //Serial.println("Not adjusting");
+                sprintf(menuBuffer[index], "%s:%8u", menuItems[index], curCm);
+                _SetCursorOnMenuItem(curPointerBuff, menuBuffer[index], '>');
+                _PutLineInBuffer(buff, curPointerBuff);
+                LcdPrint(lcdCharArr);
+                adjusting = false;
+                _Debounce();
+              break;
+            case(BUT_NONE):
+              //Nothing
+              break;
+            }
+          }
+          adjusting = true;
+        }
+        //Serial.println("Breaking out of both button press case");
+        break;
+        //END OF BUT_BOTH CASE //**************************END OF CASE WHERE WE ARE ADJUSTING ONE*****
+      case(BUT_NONE):
+        //Nothing
+        break;
+    }
+  }//**************************END OF LOOP WHERE WE ARE SELECTING MENU*****
+  if (curCm > 0){
+    lengthInSteps = ((unsigned long)curCm * 2038 * 10) / 35; //2048 steps/rotation, 10mm/cm, 35mm/rotation
+  }
+  Serial.println("lengthInSteps");
+  Serial.println(lengthInSteps);
+
+/*
   buttonPress_t pressType = BUT_NONE;
   long totalSteps = 0;
   long stepsThisTime = 0;
@@ -494,6 +644,7 @@ void _SetNewPos(){
         
     }
   }
+  */
 }
 
 //----------_SetNewDuration()----------
@@ -680,7 +831,11 @@ void _ShowStatusScreen(){
 	if (isRunning){
 		buff = _PutLineInBuffer(buff, "Running");
 	}
-	else{
+  else if(needsReset)
+  {
+    buff = _PutLineInBuffer(buff, "Finished");
+  }
+	else{ //Not running and doesn't need reset
 		buff = _PutLineInBuffer(buff, "Stopped");
 	}
   buff = _PutLineInBuffer(buff, "stp/s:------");
@@ -748,6 +903,9 @@ screens_t _ShowMenu(void){
   Serial.println("Making start stop string");
   if (isRunning){
     sprintf(startStopBuff, " Stop");
+  }
+  else if (needsReset){
+    sprintf(startStopBuff, " Reset");
   }
   else{
     sprintf(startStopBuff, " Start");
