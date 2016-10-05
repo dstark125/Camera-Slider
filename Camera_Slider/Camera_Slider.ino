@@ -1,5 +1,6 @@
 #include <AccelStepper.h>
 #include <LiquidCrystal.h>
+#include <EEPROM.h>
 
 //************* LCD Stuff *************
 
@@ -151,17 +152,17 @@ AccelStepper stepper(FULL4WIRE, motorPin1, motorPin3, motorPin2, motorPin4);
 
 //************* Status Stuff *************
 bool isRunning = false;
-unsigned long cycleTime = 600;
-unsigned long lengthInSteps =  10000; //36mm dia, 600mm rods, 4096 steps/rotation
+unsigned long cycleTime = 0;
+unsigned long lengthInSteps =  0;
 unsigned long curPos = 0; 
 unsigned long startTime;
-float stepsPerSecond = lengthInSteps / cycleTime;
+float stepsPerSecond = 1;
 
 //************* Other Pins *************
 
 //************* Setup *************
 
-void setup() {
+void setup() {  
   pinMode(LOWER_BUTTON_PIN, INPUT);
   pinMode(UPPER_BUTTON_PIN, INPUT);
 
@@ -169,6 +170,8 @@ void setup() {
   
   Serial.begin(115200);
   delay(300);
+
+  _LoadConfig();
 
   LcdInitialise();
   LcdClear();
@@ -208,7 +211,70 @@ void loop() {
     Serial.println("Setting new position");
     _SetNewDuration();
     break;
+  case(SCREEN_SAVE):
+    _StoreConfig();
+    break;
   }  
+}
+
+//************* Save / Restore Helpers *************
+
+void _LoadConfig(){
+  uint8_t eepromByte;
+  cycleTime = 0;
+  lengthInSteps = 0;
+  
+  eepromByte = EEPROM.read(0);
+  cycleTime |= eepromByte; cycleTime <<= 8;
+  eepromByte = EEPROM.read(1);
+  cycleTime |= eepromByte; cycleTime <<= 8;
+  eepromByte = EEPROM.read(2);
+  cycleTime |= eepromByte; cycleTime <<= 8;
+  eepromByte = EEPROM.read(3);
+  cycleTime |= eepromByte;
+
+  eepromByte = EEPROM.read(4);
+  lengthInSteps |= eepromByte; lengthInSteps <<= 8;
+  eepromByte = EEPROM.read(5);
+  lengthInSteps |= eepromByte; lengthInSteps <<= 8;
+  eepromByte = EEPROM.read(6);
+  lengthInSteps |= eepromByte; lengthInSteps <<= 8;
+  eepromByte = EEPROM.read(7);
+  lengthInSteps |= eepromByte;
+  
+  //Serial.println("Loaded cycle time:");
+  //Serial.println(cycleTime);
+  //Serial.println("Loaded length in steps:");
+  //Serial.println(lengthInSteps);
+}
+
+void _StoreConfig(){
+  uint8_t eepromByte;
+  unsigned long temp;
+
+  //Serial.println("Storing config");
+  //Serial.println("Storing cycle time:");
+  //Serial.println(cycleTime);
+  //Serial.println("Storing length in steps:");
+  //Serial.println(lengthInSteps);
+
+  temp = cycleTime;
+  EEPROM.write(3, temp & 0xff);
+  temp >>= 8;
+  EEPROM.write(2, temp & 0xff);
+  temp >>= 8;
+  EEPROM.write(1, temp & 0xff);
+  temp >>= 8;
+  EEPROM.write(0, temp & 0xff);
+  
+  temp = lengthInSteps;
+  EEPROM.write(7, temp & 0xff);
+  temp >>= 8;
+  EEPROM.write(6, temp & 0xff);
+  temp >>= 8;
+  EEPROM.write(5, temp & 0xff);
+  temp >>= 8;
+  EEPROM.write(4, temp & 0xff);
 }
 
 //************* Button Helpers *************
@@ -278,12 +344,16 @@ void _ToggleStartStop(){
   isRunning = !isRunning;
   if (isRunning){
     float newSpeed = (float)(lengthInSteps/10) / (float)(cycleTime/10);
+    if (newSpeed > 500){
+      newSpeed = 500.0;
+    }
+    stepsPerSecond = newSpeed;
     Serial.println("Newspeed:");
     Serial.println(newSpeed);
     LcdPrint("Started!");
     stepper.reset();
     stepper.setSpeed(newSpeed);
-    setTimer2Frequency(constrain(newSpeed * 3, 80, 1200));
+    setTimer2Frequency(constrain(newSpeed * 4, 80, 1200));
     startTime = millis();
   }
   else{
@@ -415,9 +485,9 @@ void _SetNewPos(){
   stepper.reset();
   stepper.setSpeed(-400.0);
   stepsThisTime = totalSteps;
-  Serial.print("Rewinding ");
-  Serial.print(stepsThisTime);
-  Serial.println(" steps");
+  //Serial.print("Rewinding ");
+  //Serial.print(stepsThisTime);
+  //Serial.println(" steps");
   while (stepsThisTime != 0){
     if (stepper.runSpeed()){
         stepsThisTime--;
@@ -460,7 +530,7 @@ void _SetNewDuration(){
   LcdPrint(lcdCharArr);
   _Debounce();
 
-  while (!canReturn){
+  while (!canReturn){ //**************************START OF LOOP WHERE WE ARE SELECTING MENU*****
     but = _GetButtonPressType(500);
     if (but != BUT_NONE){
       _Debounce();
@@ -471,8 +541,8 @@ void _SetNewDuration(){
           buff = lcdCharArr + ((index + 1) * 12);
           _PutLineInBuffer(buff, menuBuffer[index]);
           index--;
-          Serial.println(index);
-          Serial.println(menuBuffer[index]);
+          //Serial.println(index);
+          //Serial.println(menuBuffer[index]);
           _SetCursorOnMenuItem(curPointerBuff, menuBuffer[index], '>');
           buff -= 12;
           _PutLineInBuffer(buff, curPointerBuff);
@@ -484,21 +554,35 @@ void _SetNewDuration(){
           buff = lcdCharArr + ((index + 1) * 12);
            _PutLineInBuffer(buff, menuBuffer[index]); 
            index++;
-           Serial.println(index);
-           Serial.println(menuBuffer[index]);
+           //Serial.println(index);
+           //Serial.println(menuBuffer[index]);
           _SetCursorOnMenuItem(curPointerBuff, menuBuffer[index], '>');
           buff += 12;
           _PutLineInBuffer(buff, curPointerBuff);
           LcdPrint(lcdCharArr);
         }
         break;
-      case(BUT_BOTH):
+      case(BUT_BOTH):  //**************************START OF CASE WHERE WE ARE ADJUSTING ONE*****
         //START OF BUT_BOTH CASE
         if (index == 3){
           canReturn = true;
         }
         else{
           buff = lcdCharArr + ((index + 1) * 12);
+          switch(index){
+          case(0):
+            sprintf(menuBuffer[index], "%s:%5u", menuItems[index], curHour);
+            break;
+          case(1):
+            sprintf(menuBuffer[index], "%s:%3u", menuItems[index], curMin);
+            break;
+          case(2):
+            sprintf(menuBuffer[index], "%s:%3u", menuItems[index], curSec);
+            break;
+          }
+          _SetCursorOnMenuItem(curPointerBuff, menuBuffer[index], _spinChar());
+          _PutLineInBuffer(buff, curPointerBuff);
+          LcdPrint(lcdCharArr);
           while(!canReturn && adjusting){
             but = _GetButtonPressType(500);
             switch(but){
@@ -506,15 +590,15 @@ void _SetNewDuration(){
               do{
                 switch(index){
                 case(0):
-                  curHour++;
+                  if (curHour < 96) curHour++;
                   sprintf(menuBuffer[index], "%c%s:%5u", _spinChar(), menuItems[index]+1, curHour);
                   break;
                 case(1):
-                  curMin++;
+                  if (curMin < 60) curMin++;
                   sprintf(menuBuffer[index], "%c%s:%3u", _spinChar(), menuItems[index]+1, curMin);
                   break;
                 case(2):
-                  curSec++;
+                  if (curSec < 60) curSec++;
                   sprintf(menuBuffer[index], "%c%s:%3u", _spinChar(), menuItems[index]+1, curSec);
                   break;
                 }
@@ -527,15 +611,15 @@ void _SetNewDuration(){
               do{
                 switch(index){
                 case(0):
-                  curHour--; 
+                  if (curHour > 0) curHour--; 
                   sprintf(menuBuffer[index], "%c%s:%5u", _spinChar(), menuItems[index]+1, curHour);
                   break;
                 case(1):
-                  curMin--; 
+                  if (curMin > 0) curMin--; 
                   sprintf(menuBuffer[index], "%c%s:%3u", _spinChar(), menuItems[index]+1, curMin);
                   break;
                 case(2):
-                  curSec--;
+                  if (curSec > 0) curSec--;
                   sprintf(menuBuffer[index], "%c%s:%3u", _spinChar(), menuItems[index]+1, curSec);
                   break;
                 }
@@ -545,7 +629,7 @@ void _SetNewDuration(){
               }while(_GetButtonPressType(0) == BUT_DOWN);
               break;
             case(BUT_BOTH):
-                Serial.println("Not adjusting");
+                //Serial.println("Not adjusting");
                 switch(index){
                 case(0):
                   sprintf(menuBuffer[index], "%s:%5u", menuItems[index], curHour);
@@ -570,16 +654,16 @@ void _SetNewDuration(){
           }
           adjusting = true;
         }
-        Serial.println("Breaking out of both button press case");
+        //Serial.println("Breaking out of both button press case");
         break;
-        //END OF BUT_BOTH CASE
+        //END OF BUT_BOTH CASE //**************************END OF CASE WHERE WE ARE ADJUSTING ONE*****
       case(BUT_NONE):
         //Nothing
         break;
     }
-  }
+  }//**************************END OF LOOP WHERE WE ARE SELECTING MENU*****
   if (curHour || curMin || curSec){
-    cycleTime = (curHour * 60 * 60) + (curMin * 60) + curSec;  
+    cycleTime = ((unsigned long)curHour * 60 * 60) + ((unsigned long)curMin * 60) + (unsigned long)curSec;  
   }
   Serial.println("Cycle time");
   Serial.println(cycleTime);
@@ -633,7 +717,7 @@ void _ShowStatusScreen(){
     }
   }
   else{
-    Serial.println("Showing blank status");
+    //Serial.println("Showing blank status");
     while (_GetButtonPressType(500) != BUT_BOTH){
       delay(100);
     }
