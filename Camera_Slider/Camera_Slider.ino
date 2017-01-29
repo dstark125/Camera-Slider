@@ -2,6 +2,15 @@
 #include <LiquidCrystal.h>
 #include <EEPROM.h>
 
+//************* Constants *************
+#define MAX_DISTANCE_CM 60
+#define STEPS_PER_ROTATION 2048 //2048 steps/rotation
+#define MM_PER_CM 10  //10mm/cm
+#define PULLEY_CIRCUMFERENCE 35 //35mm/rotation
+#define LENGTH_ADJUSTMENT_PERCENTAGE (10.0/11.4) //10.0 cm actually went 11.4.
+
+#define CM_TO_STEPS ((STEPS_PER_ROTATION * MM_PER_CM * LENGTH_ADJUSTMENT_PERCENTAGE)/PULLEY_CIRCUMFERENCE)
+
 //************* LCD Stuff *************
 
 #define PIN_SCE   11 // SCE - Chip select, pin 3 on LCD.
@@ -153,7 +162,7 @@ AccelStepper stepper(FULL4WIRE, motorPin1, motorPin3, motorPin2, motorPin4);
 
 //************* Status Stuff *************
 bool isRunning = false;
-bool needsReset = false;
+bool needsReset = true;
 unsigned long cycleTime = 0;
 unsigned long lengthInSteps =  0;
 unsigned long curPos = 0; 
@@ -357,6 +366,7 @@ void FindHomeOnRaft(void){
   while(digitalRead(LIMIT_BUTTON_PIN) == LOW){
     stepper.runSpeed();
   }
+  curPos = 0;
   LcdPrint("Finished!");
   delay(1000);
 }
@@ -364,13 +374,34 @@ void FindHomeOnRaft(void){
 //************* Screen Helpers *************
 
 char _spinChar(){
-  static char c = '|';
-  if (c == '-'){
+  char c;
+  static int count = 0;
+  if (count == 0)
+  {
     c = '|';
+    count++;
+  }
+  else if (count == 1)
+  {
+    c = '\\';
+    count++;
+  }
+  else if (count == 2)
+  {
+    c = '-';
+    count++;
   }
   else{
-    c = '-';
+    c = '/';
+    count = 0;
   }
+  return c;
+  //if (c == '-'){
+  //  c = '|';
+  //}
+  //else{
+  //  c = '-';
+  //}
 }
 
 //----------_ToggleStartStop()----------
@@ -468,7 +499,7 @@ void _SetNewPos(){
             switch(but){
             case(BUT_UP):
               do{
-                if (curCm < 30) curCm++;
+                if (curCm < MAX_DISTANCE_CM) curCm++;
                 sprintf(menuBuffer[index], "%s:%8u", menuItems[index], curCm);
                 _PutLineInBuffer(buff,menuBuffer[index]);
                 LcdPrint(lcdCharArr);
@@ -477,7 +508,7 @@ void _SetNewPos(){
               break;
             case(BUT_DOWN):
               do{
-                if (curCm < 30) curCm--;
+                if (curCm > 0) curCm--;
                 sprintf(menuBuffer[index], "%s:%8u", menuItems[index], curCm);
                 _PutLineInBuffer(buff,menuBuffer[index]);
                 LcdPrint(lcdCharArr);
@@ -509,7 +540,35 @@ void _SetNewPos(){
     }
   }//**************************END OF LOOP WHERE WE ARE SELECTING MENU*****
   if (curCm > 0){
-    lengthInSteps = ((unsigned long)curCm * 2038 * 10) / 35; //2048 steps/rotation, 10mm/cm, 35mm/rotation
+    /*Serial.println("---1");
+    lengthInSteps = curCm * (unsigned long)STEPS_PER_ROTATION;
+    Serial.println(lengthInSteps);
+    lengthInSteps = lengthInSteps * (unsigned long)MM_PER_CM;
+    Serial.println(lengthInSteps);
+    lengthInSteps = lengthInSteps * (unsigned long)LENGTH_ADJUSTMENT_PERCENTAGE;
+    Serial.println(lengthInSteps);
+    lengthInSteps = lengthInSteps / (unsigned long)PULLEY_CIRCUMFERENCE;
+    Serial.println(lengthInSteps);
+    Serial.println("---2");
+    lengthInSteps = (unsigned long)(((float)curCm * MM_PER_CM * LENGTH_ADJUSTMENT_PERCENTAGE) / PULLEY_CIRCUMFERENCE); //Do float math
+    Serial.println(lengthInSteps);
+    lengthInSteps = lengthInSteps * (unsigned long)STEPS_PER_ROTATION; //Then unsigned math
+    Serial.println(lengthInSteps);
+    Serial.println("---3");
+    lengthInSteps = (unsigned long)(((float)curCm * (float)STEPS_PER_ROTATION * (float)MM_PER_CM * (float)LENGTH_ADJUSTMENT_PERCENTAGE) / (float)PULLEY_CIRCUMFERENCE); //Do float math
+    Serial.println(lengthInSteps);
+    lengthInSteps = lengthInSteps * (unsigned long)STEPS_PER_ROTATION; //Then unsigned math
+    Serial.println(lengthInSteps);
+    //lengthInSteps = (unsigned long)((curCm * STEPS_PER_ROTATION * MM_PER_CM) / PULLEY_CIRCUMFERENCE); //2048 steps/rotation, 10mm/cm, 35mm/rotation
+    Serial.println("---4");*/
+    lengthInSteps = (unsigned long)curCm * CM_TO_STEPS;
+    /*Serial.println(lengthInSteps);
+    Serial.println("---5");
+    lengthInSteps = (unsigned long)((curCm * STEPS_PER_ROTATION * MM_PER_CM) / PULLEY_CIRCUMFERENCE); //2048 steps/rotation, 10mm/cm, 35mm/rotation
+    Serial.println(lengthInSteps);
+    Serial.println("---6");
+    lengthInSteps = (unsigned long)((curCm * STEPS_PER_ROTATION * MM_PER_CM * LENGTH_ADJUSTMENT_PERCENTAGE) / PULLEY_CIRCUMFERENCE); //2048 steps/rotation, 10mm/cm, 35mm/rotation
+    Serial.println(lengthInSteps);*/
   }
   Serial.println("lengthInSteps");
   Serial.println(lengthInSteps);
@@ -853,7 +912,22 @@ void _ShowStatusScreen(){
         lastPrint = millis();
         
         buff = lcdCharArr + 24;
-        sprintf(lineBuff, "stp/s:%6f", stepsPerSecond);
+        if (stepsPerSecond > 999.99) //4.1
+        {
+          sprintf(lineBuff, "stp/s:%4i.%01i", (int)stepsPerSecond, ((int)(stepsPerSecond*10))%10);  
+        }
+        else if (stepsPerSecond > 99.999) //3.2
+        {
+          sprintf(lineBuff, "stp/s:%3i.%02i", (int)stepsPerSecond, ((int)(stepsPerSecond*100))%100);  
+        }
+        else if (stepsPerSecond > 9.9999) //2.3
+        {
+          sprintf(lineBuff, "stp/s:%2i.%03i", (int)stepsPerSecond, ((int)(stepsPerSecond*1000))%1000);  
+        }
+        else //1.4
+        {
+          sprintf(lineBuff, "stp/s:%1i.%04i", (int)stepsPerSecond, ((int)(stepsPerSecond*10000))%10000);
+        }
         buff = _PutLineInBuffer(buff, lineBuff);
     
         stepsToGo = lengthInSteps - curPos;
